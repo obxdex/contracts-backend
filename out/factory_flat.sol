@@ -371,15 +371,23 @@ contract OBXExchange is Ownable {
     address public factory;
     address public tokenA;
     address public tokenB;
+    address public KRSTMToken = 0x671078C0496Fa135a8c45fC7c9FA7B1501fD5146;
+    address public stableToken = 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174;
+    address public deployer = 0x55ADe9E7143bc597261e8D068c08817A932955df;
+    // change after deployment of this contracts to correct address
+    address public synteticPool = 0x55ADe9E7143bc597261e8D068c08817A932955df;
+    address public stakingPool = 0x55ADe9E7143bc597261e8D068c08817A932955df;
+    address public lotteryPool = 0x55ADe9E7143bc597261e8D068c08817A932955df;
+    //
     uint16 public feeRate;
     uint256 public tokenAaccumulatedFee;
     uint256 public tokenBaccumulatedFee;
 
-    constructor(address _tokenA, address _tokenB, address _deployer) {
+    constructor(address _tokenA, address _tokenB) {
         tokenA = _tokenA;
         tokenB = _tokenB;
         factory = msg.sender;
-        _transferOwnership(_deployer);
+        _transferOwnership(deployer);
         feeRate = 999; // 0.1%
     }
 
@@ -402,12 +410,34 @@ contract OBXExchange is Ownable {
 
     event Trade(uint otype, uint64 indexed price, uint256 amountGet, uint256 amountGive, address indexed userFill, address indexed userFilled, uint256 timestamp);
 
-    function Fee500() public onlyOwner {
-        feeRate = 500; //  0.05%  > in case platform grows or for specific pairs
-    }
 
-    function Fee200() public onlyOwner {
-        feeRate = 200; //  0.02%  > in case platform grows or for specific pairs
+    function distributeFees() public returns (bool) {
+        if(tokenA == KRSTMToken){
+
+            IERC20(tokenA).transfer(deployer, tokenAaccumulatedFee/3);
+            IERC20(tokenA).transfer(synteticPool, tokenAaccumulatedFee/3);
+            IERC20(tokenA).transfer(lotteryPool, tokenAaccumulatedFee/3);
+
+        } else{
+
+            IERC20(tokenA).transfer(deployer, tokenAaccumulatedFee);
+
+        }
+
+        if(tokenB == stableToken){
+
+            IERC20(tokenB).transfer(deployer, tokenBaccumulatedFee/2);
+            IERC20(tokenB).transfer(stakingPool, tokenBaccumulatedFee/2);
+
+        } else{
+
+            IERC20(tokenB).transfer(deployer, tokenBaccumulatedFee);
+
+        }
+
+        tokenAaccumulatedFee = 0;
+        tokenBaccumulatedFee = 0;
+        return true;
     }
 
     function deposit(address tokenAddress, uint256 amount)
@@ -439,6 +469,22 @@ contract OBXExchange is Ownable {
         deposits[msg.sender][tokenAddress] -= amount;
         return true;
     }
+    
+    function setSyntetics(address _synteticContract) public onlyOwner {
+        synteticPool = _synteticContract;
+    }
+
+    function setStaking(address _stakingContract) public onlyOwner {
+        stakingPool = _stakingContract;
+    }
+
+    function setLottery(address _lotteryContract) public onlyOwner {
+        lotteryPool = _lotteryContract;
+    }
+
+    function setStable(address _stableContract) public onlyOwner {
+        stableToken = _stableContract;
+    }
 
     function getDeposits(address account, address tokenAddress)
         external
@@ -466,10 +512,18 @@ contract OBXExchange is Ownable {
 
         // no fee under 1000
         deposit(tokenA, sellAmount);
-        uint256 currentFee = (sellAmount * (1000-feeRate)) / 1000;
-        tokenAaccumulatedFee += currentFee;
-        deposits[msg.sender][tokenA] -= currentFee;
-        sellAmount -= currentFee;
+        
+        if(IERC20(KRSTMToken).balanceOf(msg.sender) > 6.75 * 10 **18){
+           feeRate = 0;
+        } else if(IERC20(KRSTMToken).balanceOf(msg.sender) > 2.25 * 10 **18){
+           feeRate = 250;
+        } else if(IERC20(KRSTMToken).balanceOf(msg.sender) > 0.75 * 10 **18){
+           feeRate = 500;
+        } else if(IERC20(KRSTMToken).balanceOf(msg.sender) > 0.25 * 10 **18){
+           feeRate = 750;
+        } else{
+           feeRate = 999;
+        }
 
         uint256 len = orderBook[tokenB][price].length;
         for (uint8 i = 0; i < len; i++) {
@@ -482,6 +536,11 @@ contract OBXExchange is Ownable {
             if (sellAmount == 0) {
                 return true;
             } else if ((price * sellAmount) / 1000 >= buyAmount) {
+                uint256 currentFee = (sellAmount * (1000-feeRate)) / 1000;
+                tokenAaccumulatedFee += currentFee;
+                deposits[msg.sender][tokenA] -= currentFee;
+                sellAmount -= currentFee;
+
                 // sell amount >= buy amount
                 LinkedListLib.Order memory o = orderBook[tokenB][price]
                     .nodes[head_]
@@ -502,7 +561,11 @@ contract OBXExchange is Ownable {
                 sellAmount -= amountGiven;
 
             } else if (buyAmount > (price * sellAmount) / 1000) {
-                
+                uint256 currentFee = (sellAmount * (1000-feeRate)) / 1000;
+                tokenAaccumulatedFee += currentFee;
+                deposits[msg.sender][tokenA] -= currentFee;
+                sellAmount -= currentFee;
+
                 uint256 amountReceive = (price * sellAmount) / 1000;
 
                 LinkedListLib.Order memory o = orderBook[tokenB][price]
@@ -545,6 +608,10 @@ contract OBXExchange is Ownable {
             );
             OPVSetLib._add(_sellOrders, msg.sender, orderId, price, sellAmount);
             PVNodeLib._addVolume(sellOB, priceIdx, sellAmount);
+        }
+
+        if(tokenBaccumulatedFee >= 50 * 10 ** 18){
+            distributeFees();
         }
 
         return true;
@@ -621,10 +688,19 @@ contract OBXExchange is Ownable {
 
 		// no fee under 1000
         deposit(tokenB, (price * buyAmount) / 1000);
-        uint256 currentFee = (price * (buyAmount * (1000-feeRate)) / 1000) / 1000;
-        tokenBaccumulatedFee += currentFee;
-        deposits[msg.sender][tokenB] -= currentFee;
-        buyAmount -= (buyAmount * (1000-feeRate)) / 1000;
+        
+        if(IERC20(KRSTMToken).balanceOf(msg.sender) > 6.75 * 10 **18){
+           feeRate = 0;
+        } else if(IERC20(KRSTMToken).balanceOf(msg.sender) > 2.25 * 10 **18){
+           feeRate = 250;
+        } else if(IERC20(KRSTMToken).balanceOf(msg.sender) > 0.75 * 10 **18){
+           feeRate = 500;
+        } else if(IERC20(KRSTMToken).balanceOf(msg.sender) > 0.25 * 10 **18){
+           feeRate = 750;
+        } else{
+           feeRate = 999;
+        }
+
 
         uint256 len = orderBook[tokenA][price].length;
         for (uint8 i = 0; i < len; i++) {
@@ -637,6 +713,11 @@ contract OBXExchange is Ownable {
             if (buyAmount == 0) {
                 return true;
             } else if (buyAmount >= sellAmount) {
+                uint256 currentFee = (price * (buyAmount * (1000-feeRate)) / 1000) / 1000;
+                tokenBaccumulatedFee += currentFee;
+                deposits[msg.sender][tokenB] -= currentFee;
+                buyAmount -= (buyAmount * (1000-feeRate)) / 1000;
+
                 // buy amount >= sell amount
                 LinkedListLib.Order memory o = orderBook[tokenA][price]
                     .nodes[head_]
@@ -656,6 +737,11 @@ contract OBXExchange is Ownable {
 
                 buyAmount -= o.amount;
             } else if (sellAmount > buyAmount) {
+                uint256 currentFee = (price * (buyAmount * (1000-feeRate)) / 1000) / 1000;
+                tokenBaccumulatedFee += currentFee;
+                deposits[msg.sender][tokenB] -= currentFee;
+                buyAmount -= (buyAmount * (1000-feeRate)) / 1000;
+
                 uint256 amountGiven = (price * buyAmount) / 1000;
 
                 LinkedListLib.Order memory o = orderBook[tokenA][price]
@@ -704,6 +790,10 @@ contract OBXExchange is Ownable {
                 (price * buyAmount) / 1000
             );
             PVNodeLib._addVolume(buyOB, priceIdx, (price * buyAmount) / 1000);
+        }
+
+        if(tokenBaccumulatedFee >= 50 * 10 ** 18){
+            distributeFees();
         }
 
         return true;
@@ -797,14 +887,6 @@ contract OBXExchange is Ownable {
         revert("Price is not in the array");
     }
     // sellOB + buyOB functions end here
-
-    function collectFees() external onlyOwner returns (bool) {
-        IERC20(tokenA).transfer(msg.sender, tokenAaccumulatedFee);
-        IERC20(tokenB).transfer(msg.sender, tokenBaccumulatedFee);
-        tokenAaccumulatedFee = 0;
-        tokenBaccumulatedFee = 0;
-        return true;
-    }
 }
 
 
@@ -823,9 +905,7 @@ contract OBXFactory {
         require(token0 != address(0), "Token address cannot be null");
         require(getPair[token0][token1] == address(0), "Pair already exist");
 
-        address _feeReceiver = 0x46656Be8b381aDAe1fF535fF9872B6485813BD7f;
-
-        pair = address(new OBXExchange(tokenA, tokenB, _feeReceiver));
+        pair = address(new OBXExchange(tokenA, tokenB));
 
         getPair[token0][token1] = pair;
         getPair[token1][token0] = pair;

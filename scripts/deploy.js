@@ -13,14 +13,20 @@ async function main() {
   await linkedListLib.deployed();
   console.log("LinkedListLib deployed to:", linkedListLib.address);
   
-
+  const OBXReferral = await hre.ethers.getContractFactory("OBXReferral");
+  const ObxReferral = await OBXReferral.deploy();
+  await ObxReferral.deployed();
+  console.log("OBXReferral deployed to:", ObxReferral.address);
+   
   // We get the contract to deploy
 const Factory = await hre.ethers.getContractFactory("OBXFactory",   
 {
   libraries: {
     LinkedListLib: linkedListLib.address
-  } } );
-  const factory = await Factory.deploy();
+  }
+} );
+
+  const factory = await Factory.deploy(ObxReferral.address);
   await factory.deployed();
   console.log("Factory deployed to:", factory.address);
 }
